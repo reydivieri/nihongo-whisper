@@ -1,0 +1,63 @@
+{
+  "name": "nihongo-whisper-desktop",
+  "version": "1.8.0",
+  "description": "Local Japanese speech transcription and Indonesian translation desktop app.",
+  "main": "dist/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "package": "npm run build && electron-builder --win dir",
+    "package:portable": "npm run build && electron-builder --win portable",
+    "check:env": "powershell -ExecutionPolicy Bypass -File scripts/check-env.ps1"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.5"
+  },
+  "build": {
+    "appId": "com.assetcom.nihongo-whisper",
+    "productName": "Nihongo Whisper",
+    "directories": {
+      "output": "release-v1.8"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/models",
+        "to": "models"
+      },
+      {
+        "from": "resources/whisper-bin",
+        "to": "whisper-bin"
+      },
+      {
+        "from": "resources/ollama/standalone",
+        "to": "ollama/standalone"
+      },
+      {
+        "from": "resources/ollama/models",
+        "to": "ollama/models"
+      }
+    ],
+    "win": {
+      "target": "dir",
+      "signExecutable": false
+    }
+  }
+}

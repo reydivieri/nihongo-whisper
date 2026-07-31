@@ -1,0 +1,25 @@
+# Dependencies and generated output
+node_modules/
+dist/
+release-v*/
+
+# Local configuration and logs
+.env
+.env.*
+*.log
+npm-debug.log*
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Large local AI resources
+resources/models/*.bin
+resources/ollama/
+resources/whisper-bin/*.zip
+
+# Local audio diagnostics
+*.wav
+*.wav.txt
