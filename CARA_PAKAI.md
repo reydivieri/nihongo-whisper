@@ -5,7 +5,7 @@
 Buka aplikasi dari file ini:
 
 ```text
-C:\Assetcom\Asset File\whisper\release-v1.8\win-unpacked\Nihongo Whisper.exe
+C:\Assetcom\Asset File\whisper\release-v2.2\win-unpacked\Nihongo Whisper.exe
 ```
 
 ## Penjelasan Masalah Listening
@@ -38,18 +38,18 @@ Semua proses tetap di PC. Gunakan headset atau microphone dekat pembicara untuk 
 Gunakan:
 
 ```text
-Transcription Engine: Online
-Translation Mode: Online atau Offline
+Transcription Engine: Offline (whisper.cpp)
+Translation Mode: Offline
 ```
 
-Mode ini mengirim audio microphone ke OpenAI Speech-to-Text, lalu hasil teks Jepang diterjemahkan sesuai Translation Mode yang dipilih.
+Audio microphone diproses lokal oleh whisper.cpp dan tidak dikirim ke layanan eksternal.
 
 ## Cara Menjalankan
 
 1. Buka:
 
 ```text
-C:\Assetcom\Asset File\whisper\release-v1.8\win-unpacked\Nihongo Whisper.exe
+C:\Assetcom\Asset File\whisper\release-v2.2\win-unpacked\Nihongo Whisper.exe
 ```
 
 2. Buka halaman `Settings`.

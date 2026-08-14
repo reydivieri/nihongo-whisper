@@ -4,21 +4,19 @@ Nihongo Whisper adalah aplikasi desktop Windows untuk mendengarkan audio
 berbahasa Jepang, membuat transkrip Jepang, menerjemahkannya ke Bahasa
 Indonesia, dan menyusun kesimpulan percakapan melalui perintah suara.
 
-> Status: development preview (`1.8.0`). Project ini belum merupakan rilis
+> Status: development preview (`2.2.0`). Project ini belum merupakan rilis
 > stabil dan akurasi transkripsi realtime masih sedang dikembangkan.
 
 ## Fitur
 
 - Transkripsi offline menggunakan `whisper.cpp`.
-- Transkripsi online menggunakan OpenAI Speech-to-Text.
-- Terjemahan offline menggunakan Ollama dan `qwen3:1.7b`.
-- Terjemahan online menggunakan OpenAI.
+- Terjemahan offline menggunakan bundled Ollama dan `qwen3:1.7b`.
 - Halaman Settings terpisah untuk engine, model, dan parameter audio.
 - Perintah suara untuk membuat kesimpulan pembicaraan sebelumnya.
 
-Transcription Engine dan Translation Mode dapat dipilih secara terpisah.
-Mode online memerlukan koneksi internet, OpenAI API key, dan saldo API
-terpisah dari langganan ChatGPT.
+Versi 2.2 bersifat offline-only dan tidak memiliki jalur API berbayar. Audio
+ditranskripsikan secara lokal menggunakan whisper.cpp. Perlu diperhatikan bahwa
+whisper.cpp hanya membuat teks dan bukan mesin terjemahan.
 
 ## Menjalankan Versi Development
 
@@ -87,20 +85,6 @@ ggml-small.bin
 ggml-base.bin
 ```
 
-## Mode Online OpenAI
-
-API key dapat dimasukkan dari halaman Settings atau melalui environment
-variable:
-
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-$env:OPENAI_MODEL="gpt-4o-mini"
-$env:OPENAI_TRANSCRIBE_MODEL="gpt-4o-mini-transcribe"
-```
-
-Jangan menyimpan API key asli di source code atau melakukan commit terhadap
-file `.env`.
-
 ## Perintah Kesimpulan
 
 Aplikasi akan membuat kesimpulan dari transkrip sebelumnya jika mendengar:
@@ -121,4 +105,4 @@ please draw a conclusion from the previous discussion
 Akurasi transkripsi offline dipengaruhi oleh microphone Windows, tingkat
 noise, jarak pembicara, capture device, kemampuan CPU/GPU, model yang digunakan,
 dan panjang potongan audio realtime. Mode offline menjaga audio tetap berada
-di komputer. Mode online mengirim potongan audio ke layanan OpenAI.
+di komputer. Nihongo Whisper v2.2 tidak mengirim audio ke layanan eksternal.

@@ -9,21 +9,6 @@ type OllamaGenerateResponse = {
   error?: string;
 };
 
-type TranslationMode = 'offline' | 'online';
-
-type OpenAIResponsesPayload = {
-  output_text?: string;
-  output?: Array<{
-    content?: Array<{
-      text?: string;
-      type?: string;
-    }>;
-  }>;
-  error?: {
-    message?: string;
-  };
-};
-
 type TextResult = {
   ok: boolean;
   text: string;
@@ -32,30 +17,71 @@ type TextResult = {
 
 export class OllamaTranslator {
   readonly baseUrl = process.env.OLLAMA_URL ?? 'http://127.0.0.1:11435';
-  readonly model = process.env.OLLAMA_MODEL ?? 'qwen3:1.7b';
-  private mode: TranslationMode = 'offline';
-  private openAiApiKey = process.env.OPENAI_API_KEY ?? '';
-  private openAiModel = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+  private activeModel = process.env.OLLAMA_MODEL ?? 'qwen3:1.7b';
   private process: ChildProcessWithoutNullStreams | null = null;
   private serverError = '';
 
-  setMode(mode: TranslationMode) {
-    this.mode = mode;
-  }
-
-  setOpenAIConfig(config: { apiKey?: string; model?: string }) {
-    if (typeof config.apiKey === 'string') this.openAiApiKey = config.apiKey.trim();
-    if (typeof config.model === 'string' && config.model.trim()) this.openAiModel = config.model.trim();
+  async loadSettings() {
+    try {
+      const raw = await fs.promises.readFile(this.settingsPath(), 'utf8');
+      const settings = JSON.parse(raw) as { activeModel?: string };
+      if (settings.activeModel?.trim()) this.activeModel = settings.activeModel.trim();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.serverError = `Konfigurasi model lokal tidak dapat dibaca: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
   }
 
   getStatus() {
     return {
-      mode: this.mode,
+      mode: 'offline',
       ollamaUrl: this.baseUrl,
-      ollamaModel: this.model,
-      openAiModel: this.openAiModel,
-      openAiConfigured: Boolean(this.openAiApiKey)
+      ollamaModel: this.activeModel
     };
+  }
+
+  async getLocalModels() {
+    const ready = await this.ensureServer(false);
+    if (!ready.ok) return { ok: false, error: ready.error, models: [], activeModel: this.activeModel };
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`);
+      const payload = (await response.json()) as {
+        models?: Array<{ name?: string; size?: number; details?: { parameter_size?: string; quantization_level?: string } }>;
+      };
+      const models = (payload.models ?? []).flatMap((model) => model.name ? [{
+        name: model.name,
+        size: model.size ?? 0,
+        parameters: model.details?.parameter_size ?? '',
+        quantization: model.details?.quantization_level ?? ''
+      }] : []);
+      return { ok: true, models, activeModel: this.activeModel };
+    } catch (error) {
+      return { ok: false, error: this.describeNetworkError('Daftar model lokal', error), models: [], activeModel: this.activeModel };
+    }
+  }
+
+  async setActiveModel(model: string) {
+    const requestedModel = model.trim();
+    if (!requestedModel) return { ok: false, error: 'Nama model tidak boleh kosong.' };
+    const status = await this.getLocalModels();
+    if (!status.ok) return { ok: false, error: status.error };
+    if (!status.models.some((item) => item.name === requestedModel)) {
+      return { ok: false, error: `Model ${requestedModel} tidak ditemukan di model store aplikasi.` };
+    }
+    this.activeModel = requestedModel;
+    await this.saveSettings();
+    return { ok: true, activeModel: this.activeModel };
+  }
+
+  private async saveSettings() {
+    const settingsPath = this.settingsPath();
+    await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.promises.writeFile(settingsPath, JSON.stringify({ activeModel: this.activeModel }, null, 2), 'utf8');
+  }
+
+  private settingsPath() {
+    return path.join(app.getPath('userData'), 'local-ai-settings.json');
   }
 
   async translateJapaneseToIndonesian(text: string) {
@@ -69,9 +95,7 @@ export class OllamaTranslator {
       cleanText
     ].join('\n');
 
-    const result = this.mode === 'online'
-      ? await this.generateWithOpenAI(prompt)
-      : await this.generateWithOllama(prompt);
+    const result = await this.generateWithOllama(prompt);
 
     if (!result.ok) return { ok: false, error: result.error };
     return { ok: true, translation: result.text.trim() };
@@ -94,9 +118,7 @@ export class OllamaTranslator {
       cleanText
     ].join('\n');
 
-    const response = this.mode === 'online'
-      ? await this.generateWithOpenAI(prompt)
-      : await this.generateWithOllama(prompt);
+    const response = await this.generateWithOllama(prompt);
 
     if (!response.ok) return { ok: false, error: response.error, isCommand: false };
     return { ok: true, isCommand: /^yes\b/i.test(response.text.trim()) };
@@ -116,9 +138,7 @@ export class OllamaTranslator {
       cleanTranscript
     ].join('\n');
 
-    const response = this.mode === 'online'
-      ? await this.generateWithOpenAI(prompt)
-      : await this.generateWithOllama(prompt);
+    const response = await this.generateWithOllama(prompt);
 
     if (!response.ok) return { ok: false, error: response.error };
     return { ok: true, conclusion: response.text.trim() };
@@ -133,7 +153,7 @@ export class OllamaTranslator {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: this.model,
+          model: this.activeModel,
           prompt,
           stream: false,
           think: false,
@@ -158,37 +178,6 @@ export class OllamaTranslator {
     }
   }
 
-  private async generateWithOpenAI(prompt: string): Promise<TextResult> {
-    if (!this.openAiApiKey) {
-      return { ok: false, error: 'OpenAI API key belum disimpan. Buka Settings, isi API key, lalu klik Save OpenAI settings.', text: '' };
-    }
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.openAiApiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: this.openAiModel,
-          input: prompt
-        })
-      });
-
-      const payload = (await response.json()) as OpenAIResponsesPayload;
-      if (!response.ok) {
-        return { ok: false, error: payload.error?.message ?? `OpenAI returned HTTP ${response.status}.`, text: '' };
-      }
-
-      const text = this.extractOpenAIText(payload);
-      if (!text) return { ok: false, error: 'OpenAI returned an empty response.', text: '' };
-      return { ok: true, text };
-    } catch (error) {
-      return { ok: false, text: '', error: this.describeNetworkError('OpenAI online translation', error) };
-    }
-  }
-
   private matchesConclusionCommand(text: string) {
     const normalized = text.toLowerCase();
     return [
@@ -207,20 +196,11 @@ export class OllamaTranslator {
     ].some((pattern) => pattern.test(normalized));
   }
 
-  private extractOpenAIText(payload: OpenAIResponsesPayload) {
-    const directText = payload.output_text?.trim();
-    if (directText) return directText;
-
-    const parts = payload.output
-      ?.flatMap((item) => item.content ?? [])
-      .map((content) => content.text?.trim() ?? '')
-      .filter(Boolean);
-
-    return parts?.join('\n').trim() ?? '';
-  }
-
-  private async ensureServer() {
-    if (await this.isServerReady()) return { ok: true };
+  private async ensureServer(validateActiveModel = true) {
+    if (await this.isServerReady()) {
+      if (!validateActiveModel || await this.isModelAvailable()) return { ok: true };
+      return { ok: false, error: `Model aktif ${this.activeModel} tidak ditemukan di model store aplikasi.` };
+    }
 
     const executable = this.resolveOllamaExecutable();
     if (!executable) {
@@ -257,9 +237,9 @@ export class OllamaTranslator {
 
     for (let attempt = 0; attempt < 60; attempt += 1) {
       if (await this.isServerReady()) {
-        const modelReady = await this.isModelAvailable();
+        const modelReady = !validateActiveModel || await this.isModelAvailable();
         if (!modelReady) {
-          return { ok: false, error: `Ollama berjalan, tetapi model ${this.model} tidak ditemukan di model store aplikasi.` };
+          return { ok: false, error: `Ollama berjalan, tetapi model ${this.activeModel} tidak ditemukan di model store aplikasi.` };
         }
         return { ok: true };
       }
@@ -288,7 +268,7 @@ export class OllamaTranslator {
       const response = await fetch(`${this.baseUrl}/api/tags`);
       if (!response.ok) return false;
       const payload = (await response.json()) as { models?: Array<{ name?: string }> };
-      return payload.models?.some((model) => model.name === this.model) ?? false;
+      return payload.models?.some((model) => model.name === this.activeModel) ?? false;
     } catch {
       return false;
     }
@@ -297,7 +277,7 @@ export class OllamaTranslator {
   private describeNetworkError(label: string, error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     if (/fetch failed/i.test(message)) {
-      return `${label} gagal terhubung. Periksa koneksi internet/proxy/firewall untuk Online, atau coba mode Offline. Detail: ${message}`;
+      return `${label} gagal terhubung ke server lokal. Pastikan runtime dan model lokal tersedia. Detail: ${message}`;
     }
     return `${label} gagal: ${message}`;
   }

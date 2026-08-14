@@ -5,11 +5,13 @@ import {
   Mic,
   MicOff,
   Radio,
+  RefreshCw,
   RotateCcw,
   Settings,
   Sparkles
 } from 'lucide-react';
-import type { EngineStatus, ListeningOptions, TranscriptPayload, TranscriptionMode, TranslationMode } from './types';
+import { AudioVisualizer, type AudioMetrics } from './AudioVisualizer';
+import type { EngineStatus, ListeningOptions, LocalModel, TranscriptPayload } from './types';
 
 type Line = {
   id: string;
@@ -17,6 +19,7 @@ type Line = {
   indonesian: string;
   time: string;
   status: 'translating' | 'done' | 'error';
+  accuracy: number;
 };
 
 type View = 'monitor' | 'settings';
@@ -26,18 +29,37 @@ const formatTime = (iso: string) =>
 
 const conclusionCommand = '\u5148\u306e\u8a71\u304b\u3089\u7d50\u8ad6\u3092\u51fa\u3057\u3066\u304f\u3060\u3055\u3044';
 
+const emptyAudioMetrics: AudioMetrics = {
+  waveform: new Float32Array(0),
+  volume: 0,
+  vadScore: 0,
+  peakDb: Number.NEGATIVE_INFINITY,
+  rmsDb: Number.NEGATIVE_INFINITY,
+  sampleRate: 0,
+  clipping: false
+};
+
+const estimateAccuracy = ({ rmsDb, vadScore, clipping }: AudioMetrics) => {
+  if (!Number.isFinite(rmsDb)) return 0;
+  const signalScore = Math.max(0, Math.min(1, (rmsDb + 55) / 35));
+  const voiceScore = Math.max(0, Math.min(1, vadScore / 0.68));
+  const clippingPenalty = clipping ? 0.2 : 0;
+  return Math.round(Math.max(0, Math.min(0.99, 0.42 + signalScore * 0.3 + voiceScore * 0.26 - clippingPenalty)) * 100);
+};
+
 export function App() {
   const [view, setView] = useState<View>('monitor');
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState<EngineStatus>({ state: 'stopped', message: 'Ready.' });
   const [lines, setLines] = useState<Line[]>([]);
   const [error, setError] = useState('');
-  const [transcriptionMode, setTranscriptionMode] = useState<TranscriptionMode>('offline');
-  const [mode, setMode] = useState<TranslationMode>('offline');
-  const [openAiKey, setOpenAiKey] = useState('');
-  const [openAiModel, setOpenAiModel] = useState('gpt-4o-mini');
-  const [openAiTranscriptionModel, setOpenAiTranscriptionModel] = useState('gpt-4o-mini-transcribe');
-  const [settingsMessage, setSettingsMessage] = useState('');
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('default');
+  const [micStatus, setMicStatus] = useState<'waiting' | 'recording' | 'error'>('waiting');
+  const [audioMetrics, setAudioMetrics] = useState<AudioMetrics>(emptyAudioMetrics);
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
+  const [activeLocalModel, setActiveLocalModel] = useState('qwen3:1.7b');
+  const [localModelStatus, setLocalModelStatus] = useState('Memeriksa runtime lokal...');
   const [listeningOptions, setListeningOptions] = useState<Required<ListeningOptions>>({
     captureId: -1,
     stepMs: 5000,
@@ -54,9 +76,12 @@ export function App() {
   const [conclusion, setConclusion] = useState('');
   const [conclusionStatus, setConclusionStatus] = useState<'idle' | 'working' | 'done' | 'error'>('idle');
   const linesRef = useRef<Line[]>([]);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const onlineChunkBusyRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const audioMetricsRef = useRef<AudioMetrics>(emptyAudioMetrics);
+  const recentVoiceMetricsRef = useRef<{ metrics: AudioMetrics; observedAt: number } | null>(null);
+  const lastMetricsUpdateRef = useRef(0);
 
   const latestJapanese = lines[0]?.japanese ?? 'Belum ada suara Jepang yang ditangkap.';
   const latestIndonesian = lines[0]?.indonesian ?? 'Terjemahan akan muncul di sini setelah transkrip diterima.';
@@ -67,9 +92,18 @@ export function App() {
     return `${done}/${lines.length}`;
   }, [lines]);
 
+  const averageAccuracy = useMemo(() => {
+    if (!lines.length) return 0;
+    return Math.round(lines.reduce((total, line) => total + line.accuracy, 0) / lines.length);
+  }, [lines]);
+
   useEffect(() => {
     linesRef.current = lines;
   }, [lines]);
+
+  useEffect(() => {
+    audioMetricsRef.current = audioMetrics;
+  }, [audioMetrics]);
 
   const handleTranscript = useCallback(async (payload: TranscriptPayload) => {
     const text = payload.text.trim();
@@ -77,12 +111,18 @@ export function App() {
 
     const historyBeforeCommand = linesRef.current;
     const id = crypto.randomUUID();
+    const recentVoice = recentVoiceMetricsRef.current;
+    const metricsForEstimate = recentVoice && Date.now() - recentVoice.observedAt < 10000
+      ? recentVoice.metrics
+      : audioMetricsRef.current;
+    recentVoiceMetricsRef.current = null;
     const nextLine: Line = {
       id,
       japanese: text,
       indonesian: '',
       time: formatTime(payload.timestamp),
-      status: 'translating'
+      status: 'translating',
+      accuracy: estimateAccuracy(metricsForEstimate)
     };
 
     setLines((current) => [nextLine, ...current].slice(0, 120));
@@ -127,10 +167,164 @@ export function App() {
     }
   }, []);
 
+  const loadLocalModels = async () => {
+    setLocalModelStatus('Memeriksa runtime lokal...');
+    const result = await window.nihongoWhisper.getLocalModels();
+    setActiveLocalModel(result.activeModel);
+    setLocalModels(result.models);
+    if (result.ok) {
+      setLocalModelStatus(`${result.models.length} model lokal siap digunakan.`);
+    } else {
+      setLocalModelStatus(result.error ?? 'Runtime lokal tidak tersedia.');
+    }
+  };
+
+  const changeLocalModel = async (model: string) => {
+    const result = await window.nihongoWhisper.setLocalModel(model);
+    if (result.ok) {
+      setActiveLocalModel(result.activeModel ?? model);
+      setLocalModelStatus(`Model aktif: ${result.activeModel ?? model}`);
+    } else {
+      setError(result.error ?? 'Tidak dapat mengaktifkan model lokal.');
+    }
+  };
+
+  useEffect(() => {
+    void loadLocalModels();
+  }, []);
+
+  const refreshDevices = async () => {
+    try {
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'audioinput');
+      setAudioDevices(devices);
+      if (selectedDeviceId !== 'default' && !devices.some((device) => device.deviceId === selectedDeviceId)) {
+        setSelectedDeviceId('default');
+      }
+    } catch (event) {
+      setMicStatus('error');
+      setError(`Tidak dapat memindai mikrofon: ${event instanceof Error ? event.message : String(event)}`);
+    }
+  };
+
+  const stopAudioMonitoring = () => {
+    if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
+    animationFrameRef.current = null;
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    recentVoiceMetricsRef.current = null;
+    audioMetricsRef.current = emptyAudioMetrics;
+    setAudioMetrics(emptyAudioMetrics);
+    setMicStatus('waiting');
+  };
+
+  const startAudioMonitoring = async () => {
+    stopAudioMonitoring();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: selectedDeviceId === 'default' ? undefined : { exact: selectedDeviceId },
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+      const context = new AudioContext({ sampleRate: 16000 });
+      await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.18;
+      context.createMediaStreamSource(stream).connect(analyser);
+      const samples = new Float32Array(analyser.fftSize);
+
+      mediaStreamRef.current = stream;
+      audioContextRef.current = context;
+      setMicStatus('recording');
+      await refreshDevices();
+
+      const readAudio = (timestamp: number) => {
+        analyser.getFloatTimeDomainData(samples);
+        if (timestamp - lastMetricsUpdateRef.current >= 70) {
+          let sumSquares = 0;
+          let peak = 0;
+          for (const sample of samples) {
+            const absolute = Math.abs(sample);
+            sumSquares += sample * sample;
+            peak = Math.max(peak, absolute);
+          }
+          const rms = Math.sqrt(sumSquares / samples.length);
+          const rmsDb = 20 * Math.log10(Math.max(rms, 0.00000001));
+          const peakDb = 20 * Math.log10(Math.max(peak, 0.00000001));
+          const volume = Math.max(0, Math.min(100, ((rmsDb + 60) / 60) * 100));
+          const vadScore = Math.max(0, Math.min(1, (rmsDb + 55) / 45));
+          const nextMetrics: AudioMetrics = {
+            waveform: samples.slice(),
+            volume,
+            vadScore,
+            peakDb,
+            rmsDb,
+            sampleRate: context.sampleRate,
+            clipping: peak >= 0.98
+          };
+          const recentVoice = recentVoiceMetricsRef.current;
+          if (
+            vadScore >= 0.2 &&
+            (!recentVoice || Date.now() - recentVoice.observedAt > 10000 || estimateAccuracy(nextMetrics) >= estimateAccuracy(recentVoice.metrics))
+          ) {
+            recentVoiceMetricsRef.current = { metrics: nextMetrics, observedAt: Date.now() };
+          }
+          audioMetricsRef.current = nextMetrics;
+          setAudioMetrics(nextMetrics);
+          lastMetricsUpdateRef.current = timestamp;
+        }
+        animationFrameRef.current = requestAnimationFrame(readAudio);
+      };
+      animationFrameRef.current = requestAnimationFrame(readAudio);
+      return stream;
+    } catch (event) {
+      const message = event instanceof Error ? event.message : String(event);
+      setMicStatus('error');
+      setError(`Tidak dapat membuka mikrofon: ${message}`);
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    void refreshDevices();
+    const handleDeviceChange = () => void refreshDevices();
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
+      void audioContextRef.current?.close();
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleWindowError = (event: ErrorEvent) => {
+      setError(`Aplikasi error: ${event.message || 'Unknown renderer error'}`);
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
+      setError(`Operasi gagal: ${reason}`);
+    };
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   useEffect(() => {
     const unsubscribeStatus = window.nihongoWhisper.onWhisperStatus((payload) => {
       setStatus(payload);
       setListening(payload.state === 'running' || payload.state === 'starting');
+      if (payload.state === 'stopped' && mediaStreamRef.current) stopAudioMonitoring();
     });
 
     const unsubscribeError = window.nihongoWhisper.onWhisperError((payload) => {
@@ -149,115 +343,20 @@ export function App() {
     };
   }, [handleTranscript]);
 
-  const getOnlineMimeType = () => {
-    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
-    return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? '';
-  };
-
-  const processOnlineAudioChunk = async (blob: Blob) => {
-    if (!blob.size || onlineChunkBusyRef.current) return;
-    onlineChunkBusyRef.current = true;
-
-    try {
-      const buffer = await blob.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buffer));
-      const result = await window.nihongoWhisper.transcribeOnlineAudio({
-        bytes,
-        mimeType: blob.type || getOnlineMimeType() || 'audio/webm',
-        model: openAiTranscriptionModel
-      });
-
-      if (!result.ok) {
-        setError(result.error ?? 'Online transcription failed.');
-        return;
-      }
-
-      const text = result.text?.trim();
-      if (text) {
-        await handleTranscript({
-          text,
-          raw: text,
-          timestamp: new Date().toISOString()
-        });
-      }
-    } finally {
-      onlineChunkBusyRef.current = false;
-    }
-  };
-
-  const startOnlineTranscription = async () => {
-    if (!openAiKey.trim()) {
-      setError('OpenAI API key is required for Online transcription.');
-      return { ok: false };
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      const mimeType = getOnlineMimeType();
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-
-      recorder.ondataavailable = (event) => {
-        void processOnlineAudioChunk(event.data);
-      };
-      recorder.onerror = (event) => {
-        setError(`Online microphone recorder error: ${event.error.message}`);
-        setListening(false);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-      };
-
-      mediaStreamRef.current = stream;
-      mediaRecorderRef.current = recorder;
-      recorder.start(4500);
-      setStatus({ state: 'running', message: 'Listening with OpenAI online transcription.' });
-      setListening(true);
-      return { ok: true };
-    } catch (event) {
-      const message = event instanceof Error ? event.message : String(event);
-      setError(`Unable to start Online microphone listener: ${message}`);
-      setListening(false);
-      return { ok: false };
-    }
-  };
-
-  const stopOnlineTranscription = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    mediaRecorderRef.current = null;
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-    onlineChunkBusyRef.current = false;
-    setStatus({ state: 'stopped', message: 'Online transcription stopped.' });
-  };
-
   const start = async () => {
     setError('');
-    await window.nihongoWhisper.setOpenAIConfig({
-      apiKey: openAiKey,
-      model: openAiModel,
-      transcriptionModel: openAiTranscriptionModel
-    });
-    if (transcriptionMode === 'online') {
-      await window.nihongoWhisper.stopWhisper();
-      await startOnlineTranscription();
-      return;
-    }
-
-    stopOnlineTranscription();
+    const stream = await startAudioMonitoring();
+    if (!stream) return;
     const result = await window.nihongoWhisper.startWhisper(listeningOptions);
-    if (!result.ok) setError(result.error ?? 'Unable to start microphone listener.');
+    if (!result.ok) {
+      stopAudioMonitoring();
+      setMicStatus('error');
+      setError(result.error ?? 'Unable to start microphone listener.');
+    }
   };
 
   const stop = async () => {
-    stopOnlineTranscription();
+    stopAudioMonitoring();
     await window.nihongoWhisper.stopWhisper();
     setListening(false);
   };
@@ -266,23 +365,6 @@ export function App() {
     setLines([]);
     setConclusion('');
     setConclusionStatus('idle');
-  };
-
-  const changeMode = async (nextMode: TranslationMode) => {
-    setMode(nextMode);
-    setError('');
-    await window.nihongoWhisper.setTranslatorMode(nextMode);
-  };
-
-  const saveOpenAIConfig = async () => {
-    setError('');
-    setSettingsMessage('');
-    await window.nihongoWhisper.setOpenAIConfig({
-      apiKey: openAiKey,
-      model: openAiModel,
-      transcriptionModel: openAiTranscriptionModel
-    });
-    setSettingsMessage('OpenAI settings saved.');
   };
 
   const updateListeningOption = <K extends keyof Required<ListeningOptions>>(
@@ -372,6 +454,32 @@ export function App() {
           </div>
         </div>
 
+        <div className="device-panel">
+          <div className="device-title-row">
+            <label htmlFor="microphone-device">Microphone</label>
+            <button type="button" onClick={() => void refreshDevices()} title="Refresh microphone list" aria-label="Refresh microphone list">
+              <RefreshCw size={15} />
+            </button>
+          </div>
+          <select
+            id="microphone-device"
+            value={selectedDeviceId}
+            disabled={listening}
+            onChange={(event) => setSelectedDeviceId(event.target.value)}
+          >
+            <option value="default">System default</option>
+            {audioDevices.filter((device) => device.deviceId !== 'default').map((device, index) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Microphone ${index + 1}`} — {device.deviceId}
+              </option>
+            ))}
+          </select>
+          <span className={`mic-device-status ${micStatus}`}>
+            {micStatus === 'recording' ? '🔴 Recording' : micStatus === 'error' ? '❌ Error' : 'Waiting...'}
+          </span>
+          <small>ID: {selectedDeviceId}</small>
+        </div>
+
         <button className="primary-action" onClick={listening ? stop : start}>
           {listening ? <MicOff size={20} /> : <Mic size={20} />}
           {listening ? 'Stop Listening' : 'Start Listening'}
@@ -391,11 +499,15 @@ export function App() {
             <strong>{completion}</strong>
             <span>translated</span>
           </div>
+          <div>
+            <strong>{lines.length ? `${averageAccuracy}%` : '—'}</strong>
+            <span>estimated accuracy</span>
+          </div>
         </div>
 
         <div className="settings-card">
           <Settings size={18} />
-          <p>Version 1.8. Offline transcription is stricter against silence, noise, and repeated wrong context.</p>
+          <p>Version 2.2. Bundled local translation with selectable AI models.</p>
         </div>
       </aside>
 
@@ -409,12 +521,19 @@ export function App() {
               <h2>Realtime Japanese to Indonesian</h2>
             </div>
             <div className="session-chip">
-              <Sparkles size={16} /> {transcriptionMode === 'online' ? 'OpenAI STT' : 'Local STT'} /{' '}
-              {mode === 'online' ? 'OpenAI translation' : 'Offline translation'}
+              <Sparkles size={16} /> Offline whisper.cpp / Local translation
             </div>
           </header>
 
-          {error ? <div className="error-banner">{error}</div> : null}
+          {error ? (
+            <div className="error-banner" role="alert">
+              <strong>❌ Error</strong>
+              <span>{error}</span>
+              <button type="button" onClick={() => setError('')} aria-label="Tutup pesan error">×</button>
+            </div>
+          ) : null}
+
+          <AudioVisualizer metrics={audioMetrics} threshold={listeningOptions.vadThreshold} active={micStatus === 'recording'} />
 
           <section className="live-grid">
             <article className="live-panel japanese-panel">
@@ -451,11 +570,16 @@ export function App() {
             </div>
 
             <div className="transcript-list">
-              {lines.map((line) => (
+              {lines.slice(0, 2).map((line) => (
                 <article className="transcript-row" key={line.id}>
                   <time>{line.time}</time>
                   <div>
-                    <p className="jp">{line.japanese}</p>
+                    <div className="transcript-line-heading">
+                      <p className="jp">{line.japanese}</p>
+                      <span className="accuracy-badge" title="Estimated from microphone signal quality and VAD score">
+                        ~{line.accuracy}% accuracy
+                      </span>
+                    </div>
                     <p className={`id ${line.status}`}>{line.indonesian || 'Translating...'}</p>
                   </div>
                 </article>
@@ -473,94 +597,46 @@ export function App() {
               <h2>Engine and privacy</h2>
             </div>
             <div className="session-chip">
-              <Sparkles size={16} /> Version 1.8
+              <Sparkles size={16} /> Version 2.2
             </div>
           </header>
 
           <section className="settings-grid">
             <article className="settings-panel-large">
               <h3>Transcription Engine</h3>
-              <div className="segmented-control wide">
-                <button
-                  className={transcriptionMode === 'offline' ? 'active' : ''}
-                  onClick={() => setTranscriptionMode('offline')}
-                >
-                  Offline
-                </button>
-                <button
-                  className={transcriptionMode === 'online' ? 'active' : ''}
-                  onClick={() => setTranscriptionMode('online')}
-                >
-                  Online
+              <div className="offline-badge">Offline · whisper.cpp</div>
+              <p>
+                Audio diproses gratis dan lokal oleh whisper.cpp. Akurasi dan kecepatan bergantung pada model, kualitas mikrofon, noise ruangan, dan perangkat yang dipilih.
+              </p>
+            </article>
+
+            <article className="settings-panel-large">
+              <h3>Translation Engine</h3>
+              <div className="offline-badge">Offline · local runtime</div>
+              <p>
+                Terjemahan dan kesimpulan memakai backend lokal. whisper.cpp hanya membuat transkrip dan tidak dapat menerjemahkan sendiri.
+              </p>
+            </article>
+
+            <article className="settings-panel-large">
+              <div className="settings-title-row">
+                <h3>Local AI Model</h3>
+                <button className="model-refresh" type="button" onClick={() => void loadLocalModels()} title="Refresh local models">
+                  <RefreshCw size={14} />
                 </button>
               </div>
-              <p>
-                {transcriptionMode === 'offline'
-                  ? 'Offline uses local whisper.cpp. It keeps audio on this PC, but accuracy and speed depend heavily on microphone quality, room noise, and capture-device selection.'
-                  : 'Online records short microphone chunks and sends audio to OpenAI Speech-to-Text with Japanese language hinting. Use this when local listening writes different words from what was spoken.'}
-              </p>
-            </article>
-
-            <article className="settings-panel-large">
-              <h3>Translation Mode</h3>
-              <div className="segmented-control wide">
-                <button className={mode === 'offline' ? 'active' : ''} onClick={() => changeMode('offline')}>
-                  Offline
-                </button>
-                <button className={mode === 'online' ? 'active' : ''} onClick={() => changeMode('online')}>
-                  Online
-                </button>
-              </div>
-              <p>
-                {mode === 'offline'
-                  ? 'Offline translation uses bundled Ollama and keeps transcript text on this PC.'
-                  : 'Online translation sends Japanese transcript text to OpenAI for translation and conclusion generation.'}
-              </p>
-            </article>
-
-            <article className="settings-panel-large">
-              <h3>OpenAI Online</h3>
               <label>
-                OpenAI API key
-                <input
-                  value={openAiKey}
-                  onChange={(event) => setOpenAiKey(event.target.value)}
-                  type="password"
-                  placeholder="sk-..."
-                />
+                Model aktif
+                <select value={activeLocalModel} onChange={(event) => void changeLocalModel(event.target.value)}>
+                  {localModels.length ? localModels.map((model) => (
+                    <option key={model.name} value={model.name}>
+                      {model.name} · {(model.size / 1024 / 1024 / 1024).toFixed(1)} GB
+                    </option>
+                  )) : <option value={activeLocalModel}>{activeLocalModel}</option>}
+                </select>
               </label>
-              <label>
-                Translation model
-                <input
-                  value={openAiModel}
-                  onChange={(event) => setOpenAiModel(event.target.value)}
-                  placeholder="gpt-4o-mini"
-                />
-              </label>
-              <label>
-                Transcription model
-                <input
-                  value={openAiTranscriptionModel}
-                  onChange={(event) => setOpenAiTranscriptionModel(event.target.value)}
-                  placeholder="gpt-4o-mini-transcribe"
-                />
-              </label>
-              <button className="compact-action save-settings-action" onClick={saveOpenAIConfig}>
-                Save OpenAI settings
-              </button>
-              {settingsMessage ? <p className="settings-saved">{settingsMessage}</p> : null}
-            </article>
-
-            <article className="settings-panel-large">
-              <h3>Japanese Transcript</h3>
-              <p>
-                Version 1.8 keeps the large model support, but makes local listening more conservative: higher VAD,
-                full audio context, no fallback guessing, and no repeated context carryover between chunks.
-              </p>
-              <p className="settings-note">
-                For local transcription, use a quiet room, keep the speaker close to the microphone, and verify the capture
-                device. Large models improve Japanese accuracy but need more memory and can be slower on CPU-only PCs.
-              </p>
+              <p className={localModels.length ? 'model-status ready' : 'model-status'}>{localModelStatus}</p>
+              <p>Audio dan teks diproses lokal. Tidak ada API key atau upload ke layanan eksternal.</p>
             </article>
 
             <article className="settings-panel-large">

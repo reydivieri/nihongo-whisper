@@ -63,6 +63,20 @@ export class WhisperEngine {
     this.pendingTranscript = '';
     this.pendingRaw = '';
 
+    if (!fs.existsSync(executable)) {
+      const message = `Whisper executable tidak ditemukan: ${executable}`;
+      this.options.onError({ message });
+      this.options.onStatus({ state: 'stopped', message: 'Whisper executable missing.' });
+      return { ok: false, error: message };
+    }
+
+    if (!fs.existsSync(model)) {
+      const message = `Model Whisper tidak ditemukan. Simpan model GGML di ${path.join(resourcesPath, 'models')}.`;
+      this.options.onError({ message });
+      this.options.onStatus({ state: 'stopped', message: 'Whisper model missing.' });
+      return { ok: false, error: message };
+    }
+
     const args = [
       '-m',
       model,
@@ -112,15 +126,30 @@ export class WhisperEngine {
       }
     });
 
+    let lastProcessError = '';
     this.process.stderr.on('data', (chunk: Buffer) => {
       const message = this.cleanStatusLine(chunk.toString('utf8'));
+      if (/\b(error|failed|cannot|could not)\b/i.test(message)) lastProcessError = message;
       if (message) this.options.onStatus({ state: 'running', message });
     });
 
-    this.process.on('exit', () => {
+    this.process.on('error', (error) => {
+      const message = `Whisper gagal dijalankan: ${error.message}`;
+      this.process = null;
+      this.options.onError({ message });
+      this.options.onStatus({ state: 'stopped', message: 'Whisper process error.' });
+    });
+
+    this.process.on('exit', (code, signal) => {
       this.flushTranscript();
       this.process = null;
-      this.options.onStatus({ state: 'stopped', message: 'Whisper stream stopped.' });
+      if (code && code !== 0) {
+        const message = lastProcessError || `Whisper berhenti dengan exit code ${code}${signal ? ` (${signal})` : ''}.`;
+        this.options.onError({ message });
+        this.options.onStatus({ state: 'stopped', message: 'Whisper stopped with an error.' });
+      } else {
+        this.options.onStatus({ state: 'stopped', message: 'Whisper stream stopped.' });
+      }
     });
 
     this.options.onStatus({ state: 'running', message: `Listening with ${path.basename(model)}.` });

@@ -3,13 +3,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ListeningOptions, WhisperEngine } from './whisperEngine';
 import { OllamaTranslator } from './ollamaTranslator';
-import { OpenAITranscriber } from './onlineTranscriber';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let whisperEngine: WhisperEngine | null = null;
 const translator = new OllamaTranslator();
-const transcriber = new OpenAITranscriber();
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -26,6 +24,14 @@ const createWindow = () => {
     }
   });
 
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    const isTrustedOrigin =
+      details.requestingUrl.startsWith('file:') ||
+      details.requestingUrl.startsWith('http://localhost') ||
+      details.requestingUrl.startsWith('http://127.0.0.1');
+    callback(permission === 'media' && isTrustedOrigin);
+  });
+
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -33,29 +39,15 @@ const createWindow = () => {
   }
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await translator.loadSettings();
   createWindow();
 
   ipcMain.handle('app:get-status', async () => ({
     platform: process.platform,
     translator: translator.getStatus(),
-    transcriber: transcriber.getStatus(),
     whisperRunning: whisperEngine?.isRunning ?? false
   }));
-
-  ipcMain.handle('translator:set-mode', async (_event, mode: 'offline' | 'online') => {
-    translator.setMode(mode);
-    return { ok: true, translator: translator.getStatus() };
-  });
-
-  ipcMain.handle(
-    'translator:set-openai-config',
-    async (_event, config: { apiKey?: string; model?: string; transcriptionModel?: string }) => {
-      translator.setOpenAIConfig(config);
-      transcriber.setConfig(config);
-      return { ok: true, translator: translator.getStatus(), transcriber: transcriber.getStatus() };
-    }
-  );
 
   ipcMain.handle('translator:translate', async (_event, text: string) => {
     return translator.translateJapaneseToIndonesian(text);
@@ -69,12 +61,9 @@ app.whenReady().then(() => {
     return translator.concludeDiscussion(transcript);
   });
 
-  ipcMain.handle(
-    'openai:transcribe-audio',
-    async (_event, input: { bytes: number[]; mimeType?: string; apiKey?: string; model?: string }) => {
-      return transcriber.transcribeAudio(input);
-    }
-  );
+  ipcMain.handle('translator:get-local-models', async () => translator.getLocalModels());
+
+  ipcMain.handle('translator:set-local-model', async (_event, model: string) => translator.setActiveModel(model));
 
   ipcMain.handle('whisper:start', async (_event, options?: ListeningOptions) => {
     if (!mainWindow) return { ok: false, error: 'Main window is not ready.' };
