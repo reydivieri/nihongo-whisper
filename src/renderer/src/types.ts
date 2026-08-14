@@ -27,8 +27,19 @@ export type ConclusionResult = {
   error?: string;
 };
 
-export type TranslationMode = 'offline' | 'online';
-export type TranscriptionMode = 'offline' | 'online';
+export type LocalModel = {
+  name: string;
+  size: number;
+  parameters: string;
+  quantization: string;
+};
+
+export type LocalModelsResult = {
+  ok: boolean;
+  models: LocalModel[];
+  activeModel: string;
+  error?: string;
+};
 
 export type ListeningOptions = {
   captureId?: number;
@@ -44,28 +55,17 @@ export type ListeningOptions = {
   noGpu?: boolean;
 };
 
-export type OnlineTranscriptionResult = {
-  ok: boolean;
-  text?: string;
-  error?: string;
-};
-
 declare global {
   interface Window {
     nihongoWhisper: {
       getStatus: () => Promise<unknown>;
       startWhisper: (options?: ListeningOptions) => Promise<{ ok: boolean; error?: string }>;
       stopWhisper: () => Promise<{ ok: boolean; error?: string }>;
-      setTranslatorMode: (mode: TranslationMode) => Promise<unknown>;
-      setOpenAIConfig: (config: { apiKey?: string; model?: string; transcriptionModel?: string }) => Promise<unknown>;
-      transcribeOnlineAudio: (input: {
-        bytes: number[];
-        mimeType?: string;
-        model?: string;
-      }) => Promise<OnlineTranscriptionResult>;
       translate: (text: string) => Promise<TranslationResult>;
       isConclusionCommand: (text: string) => Promise<CommandDetectionResult>;
       concludeDiscussion: (transcript: string) => Promise<ConclusionResult>;
+      getLocalModels: () => Promise<LocalModelsResult>;
+      setLocalModel: (model: string) => Promise<{ ok: boolean; activeModel?: string; error?: string }>;
       onWhisperStatus: (callback: (payload: EngineStatus) => void) => () => void;
       onTranscript: (callback: (payload: TranscriptPayload) => void) => () => void;
       onWhisperError: (callback: (payload: { message: string }) => void) => () => void;

@@ -30,18 +30,21 @@ $whisperStreamRelease = Join-Path $root "resources\whisper-bin\Release\whisper-s
 $model = Join-Path $root "resources\models\ggml-base.bin"
 $smallModel = Join-Path $root "resources\models\ggml-small.bin"
 $ollamaModels = Join-Path $root "resources\ollama\models"
+$qwenManifest = Join-Path $ollamaModels "manifests\registry.ollama.ai\library\qwen3\1.7b"
 
 if ((Test-Path $whisperStream) -or (Test-Path $whisperStreamRelease)) { $whisperStatus = 'found' } else { $whisperStatus = 'missing' }
 if (Test-Path $model) { $modelStatus = 'found' } else { $modelStatus = 'missing' }
 if (Test-Path $smallModel) { $smallModelStatus = 'found' } else { $smallModelStatus = 'missing' }
 if (Test-Path $ollamaModels) { $ollamaModelStatus = 'found' } else { $ollamaModelStatus = 'missing' }
+if (Test-Path $qwenManifest) { $qwenStatus = 'found' } else { $qwenStatus = 'missing' }
 
 Write-Host "whisper-stream.exe: $whisperStatus"
 Write-Host "ggml-base.bin:       $modelStatus"
 Write-Host "ggml-small.bin:      $smallModelStatus"
 Write-Host "Ollama model store:  $ollamaModelStatus"
+Write-Host "qwen3:1.7b:         $qwenStatus"
 Write-Host ""
-if ($whisperStatus -eq 'found' -and $smallModelStatus -eq 'found' -and $ollamaModelStatus -eq 'found') {
+if ($whisperStatus -eq 'found' -and $modelStatus -eq 'found' -and $ollamaModelStatus -eq 'found' -and $qwenStatus -eq 'found') {
   Write-Host "Ready: local transcription and offline translation resources are available."
 } else {
   Write-Host "Next: complete missing resources before end-to-end testing."

@@ -16,14 +16,11 @@ contextBridge.exposeInMainWorld('nihongoWhisper', {
     noGpu?: boolean;
   }) => ipcRenderer.invoke('whisper:start', options),
   stopWhisper: () => ipcRenderer.invoke('whisper:stop'),
-  setTranslatorMode: (mode: 'offline' | 'online') => ipcRenderer.invoke('translator:set-mode', mode),
-  setOpenAIConfig: (config: { apiKey?: string; model?: string; transcriptionModel?: string }) =>
-    ipcRenderer.invoke('translator:set-openai-config', config),
-  transcribeOnlineAudio: (input: { bytes: number[]; mimeType?: string; model?: string }) =>
-    ipcRenderer.invoke('openai:transcribe-audio', input),
   translate: (text: string) => ipcRenderer.invoke('translator:translate', text),
   isConclusionCommand: (text: string) => ipcRenderer.invoke('translator:is-conclusion-command', text),
   concludeDiscussion: (transcript: string) => ipcRenderer.invoke('translator:conclude-discussion', transcript),
+  getLocalModels: () => ipcRenderer.invoke('translator:get-local-models'),
+  setLocalModel: (model: string) => ipcRenderer.invoke('translator:set-local-model', model),
   onWhisperStatus: (callback: (payload: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
     ipcRenderer.on('whisper:status', listener);
