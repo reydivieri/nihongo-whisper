@@ -21,6 +21,11 @@ export class OllamaTranslator {
   private process: ChildProcessWithoutNullStreams | null = null;
   private serverError = '';
 
+  stop() {
+    this.process?.kill();
+    this.process = null;
+  }
+
   async loadSettings() {
     try {
       const raw = await fs.promises.readFile(this.settingsPath(), 'utf8');
@@ -229,6 +234,11 @@ export class OllamaTranslator {
 
     this.process.stderr.on('data', (chunk: Buffer) => {
       this.serverError = chunk.toString('utf8').trim();
+    });
+
+    this.process.on('error', (error) => {
+      this.serverError = `Ollama process error: ${error.message}`;
+      this.process = null;
     });
 
     this.process.on('exit', () => {

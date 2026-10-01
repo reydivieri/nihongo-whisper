@@ -1,11 +1,11 @@
-# Cara Pakai Nihongo Whisper v1.8
+# Cara Pakai Nihongo Whisper v2.4
 
 ## Lokasi Aplikasi
 
 Buka aplikasi dari file ini:
 
 ```text
-C:\Assetcom\Asset File\whisper\release-v2.2\win-unpacked\Nihongo Whisper.exe
+C:\Assetcom\Asset File\whisper\release-v2.3\win-unpacked\Nihongo Whisper.exe
 ```
 
 ## Penjelasan Masalah Listening
@@ -49,7 +49,7 @@ Audio microphone diproses lokal oleh whisper.cpp dan tidak dikirim ke layanan ek
 1. Buka:
 
 ```text
-C:\Assetcom\Asset File\whisper\release-v2.2\win-unpacked\Nihongo Whisper.exe
+C:\Assetcom\Asset File\whisper\release-v2.3\win-unpacked\Nihongo Whisper.exe
 ```
 
 2. Buka halaman `Settings`.
@@ -67,6 +67,26 @@ Start Listening
 6. Bicara menggunakan bahasa Jepang.
 
 7. Hasil muncul di panel `Japanese transcript` dan `Bahasa Indonesia`.
+
+## Menerjemahkan Zoom / Google Meet / Teams (v2.4)
+
+1. Di sidebar, ubah **Sumber audio** menjadi `Audio sistem (Zoom/Meet)`.
+   Pilih `Mikrofon + audio sistem` jika suara Anda sendiri juga ingin dicatat.
+2. Klik `Start Listening`. Model dimuat sekali (beberapa detik), lalu semua suara
+   yang keluar dari speaker/headset Windows ikut ditranskripsi.
+3. Transkrip muncul per kalimat setelah jeda bicara (sekitar 0,7 detik) atau
+   setelah mencapai `Length ms`.
+4. Pastikan volume meeting tidak di-mute. Notifikasi atau musik di PC juga akan
+   ikut tertangkap.
+
+## Session Notes & History (v2.4)
+
+- Setiap `Start Listening` pertama membuat note baru; Stop lalu Start lagi
+  melanjutkan note yang sama.
+- `New Session` menutup note aktif (tetap tersimpan) dan memulai yang baru.
+- Tab **History**: cari, rename, salin, export `.md`, hapus, atau `Lanjutkan` sesi.
+- File note ada di `%APPDATA%/nihongo-whisper-desktop/notes/` (tombol `Folder`).
+- History lama dari v2.3 otomatis diimpor sebagai note "Imported history (v2.3)".
 
 ## Perintah Membuat Kesimpulan
 

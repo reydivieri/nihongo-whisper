@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  History,
   Languages,
   Mic,
   MicOff,
   Radio,
   RefreshCw,
-  RotateCcw,
+  Plus,
   Settings,
   Sparkles
 } from 'lucide-react';
 import { AudioVisualizer, type AudioMetrics } from './AudioVisualizer';
-import type { EngineStatus, ListeningOptions, LocalModel, TranscriptPayload } from './types';
+import { HistoryView } from './HistoryView';
+import { SpeechChunker } from './speechChunker';
+import type { AudioSource, EngineStatus, ListeningOptions, LocalModel, SessionNote, TranscriptPayload } from './types';
 
 type Line = {
   id: string;
@@ -22,12 +25,57 @@ type Line = {
   accuracy: number;
 };
 
-type View = 'monitor' | 'settings';
+type View = 'monitor' | 'history' | 'settings';
+
+const audioSourceLabels: Record<AudioSource, string> = {
+  mic: 'Mikrofon',
+  system: 'Audio sistem (Zoom/Meet)',
+  mix: 'Mikrofon + audio sistem'
+};
 
 const formatTime = (iso: string) =>
   new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(iso));
 
 const conclusionCommand = '\u5148\u306e\u8a71\u304b\u3089\u7d50\u8ad6\u3092\u51fa\u3057\u3066\u304f\u3060\u3055\u3044';
+const transcriptStorageKey = 'nihongo-whisper.transcript-history.v2';
+const activeNoteStorageKey = 'nihongo-whisper.active-note';
+const audioSourceStorageKey = 'nihongo-whisper.audio-source';
+
+const readStorage = (key: string) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const writeStorage = (key: string, value: string | null) => {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    // Storage only remembers UI preferences; notes live on disk.
+  }
+};
+
+const loadStoredLines = (): Line[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(transcriptStorageKey) ?? '[]') as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is Line => {
+      if (!item || typeof item !== 'object') return false;
+      const line = item as Partial<Line>;
+      return typeof line.id === 'string' &&
+        typeof line.japanese === 'string' &&
+        typeof line.indonesian === 'string' &&
+        typeof line.time === 'string' &&
+        typeof line.accuracy === 'number' &&
+        (line.status === 'translating' || line.status === 'done' || line.status === 'error');
+    }).slice(0, 120);
+  } catch {
+    return [];
+  }
+};
 
 const emptyAudioMetrics: AudioMetrics = {
   waveform: new Float32Array(0),
@@ -82,6 +130,64 @@ export function App() {
   const audioMetricsRef = useRef<AudioMetrics>(emptyAudioMetrics);
   const recentVoiceMetricsRef = useRef<{ metrics: AudioMetrics; observedAt: number } | null>(null);
   const lastMetricsUpdateRef = useRef(0);
+  const [activeNote, setActiveNote] = useState<Pick<SessionNote, 'id' | 'title'> | null>(null);
+  const activeNoteIdRef = useRef<string | null>(null);
+  const [audioSource, setAudioSource] = useState<AudioSource>(() => {
+    const stored = readStorage(audioSourceStorageKey);
+    return stored === 'system' || stored === 'mix' ? stored : 'mic';
+  });
+  const runningSourceRef = useRef<AudioSource | null>(null);
+  const extraStreamsRef = useRef<MediaStream[]>([]);
+  const chunkerRef = useRef<SpeechChunker | null>(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const activeLocalModelRef = useRef(activeLocalModel);
+  activeLocalModelRef.current = activeLocalModel;
+
+  const setActiveSession = (note: Pick<SessionNote, 'id' | 'title'> | null) => {
+    activeNoteIdRef.current = note?.id ?? null;
+    setActiveNote(note ? { id: note.id, title: note.title } : null);
+    writeStorage(activeNoteStorageKey, note?.id ?? null);
+  };
+
+  const saveSegment = (line: Line) => {
+    const id = activeNoteIdRef.current;
+    if (!id) return;
+    void window.nihongoWhisper.notes.upsertSegment(id, line);
+  };
+
+  const ensureSession = async () => {
+    if (activeNoteIdRef.current) return activeNoteIdRef.current;
+    const note = await window.nihongoWhisper.notes.create({
+      audioSource: audioSourceLabels[audioSource],
+      translatorModel: activeLocalModelRef.current
+    });
+    setActiveSession(note);
+    setHistoryRefreshKey((key) => key + 1);
+    return note.id;
+  };
+
+  const loadSessionIntoMonitor = (note: SessionNote) => {
+    setActiveSession(note);
+    setLines(note.segments);
+    setConclusion(note.conclusion?.text ?? '');
+    setConclusionStatus(note.conclusion?.text ? 'done' : 'idle');
+  };
+
+  // Restore the active session and migrate the v2.3 localStorage history into a note.
+  useEffect(() => {
+    void (async () => {
+      const legacy = loadStoredLines();
+      if (legacy.length) {
+        await window.nihongoWhisper.notes.create({ title: 'Imported history (v2.3)', segments: legacy });
+        writeStorage(transcriptStorageKey, null);
+        setHistoryRefreshKey((key) => key + 1);
+      }
+      const storedId = readStorage(activeNoteStorageKey);
+      const note = storedId ? await window.nihongoWhisper.notes.get(storedId) : null;
+      if (note) loadSessionIntoMonitor(note);
+      else writeStorage(activeNoteStorageKey, null);
+    })();
+  }, []);
 
   const latestJapanese = lines[0]?.japanese ?? 'Belum ada suara Jepang yang ditangkap.';
   const latestIndonesian = lines[0]?.indonesian ?? 'Terjemahan akan muncul di sini setelah transkrip diterima.';
@@ -125,9 +231,11 @@ export function App() {
       accuracy: estimateAccuracy(metricsForEstimate)
     };
 
-    setLines((current) => [nextLine, ...current].slice(0, 120));
+    setLines((current) => [nextLine, ...current].slice(0, 500));
+    saveSegment(nextLine);
     const translated = await window.nihongoWhisper.translate(text);
     const translatedText = translated.ok ? translated.translation ?? '' : translated.error ?? 'Translation failed.';
+    saveSegment({ ...nextLine, indonesian: translatedText, status: translated.ok ? 'done' : 'error' });
 
     setLines((current) =>
       current.map((line) =>
@@ -158,6 +266,8 @@ export function App() {
       if (result.ok) {
         setConclusion(result.conclusion ?? '');
         setConclusionStatus('done');
+        const noteId = activeNoteIdRef.current;
+        if (noteId) void window.nihongoWhisper.notes.update(noteId, { conclusion: result.conclusion ?? '' });
       } else {
         setConclusion(result.error ?? 'Unable to create conclusion.');
         setConclusionStatus('error');
@@ -213,34 +323,73 @@ export function App() {
     audioContextRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
+    extraStreamsRef.current.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+    extraStreamsRef.current = [];
+    chunkerRef.current = null;
     recentVoiceMetricsRef.current = null;
     audioMetricsRef.current = emptyAudioMetrics;
     setAudioMetrics(emptyAudioMetrics);
     setMicStatus('waiting');
   };
 
-  const startAudioMonitoring = async () => {
+  const openMicrophone = () =>
+    navigator.mediaDevices.getUserMedia({
+      audio: {
+        deviceId: selectedDeviceId === 'default' ? undefined : { exact: selectedDeviceId },
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false
+      }
+    });
+
+  const openSystemAudio = async () => {
+    // Electron's display-media handler answers with WASAPI loopback audio of the whole system.
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    stream.getVideoTracks().forEach((track) => {
+      track.stop();
+      stream.removeTrack(track);
+    });
+    if (!stream.getAudioTracks().length) throw new Error('Audio sistem tidak tersedia di perangkat ini.');
+    return stream;
+  };
+
+  const startAudioMonitoring = async (source: AudioSource) => {
     stopAudioMonitoring();
+    const streams: MediaStream[] = [];
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: selectedDeviceId === 'default' ? undefined : { exact: selectedDeviceId },
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        }
-      });
+      if (source === 'mic' || source === 'mix') streams.push(await openMicrophone());
+      if (source === 'system' || source === 'mix') streams.push(await openSystemAudio());
+      const [stream, ...extraStreams] = streams;
       const context = new AudioContext({ sampleRate: 16000 });
       await context.resume();
       const analyser = context.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.18;
-      context.createMediaStreamSource(stream).connect(analyser);
+      const mixer = context.createGain();
+      mixer.connect(analyser);
+      for (const item of streams) context.createMediaStreamSource(item).connect(mixer);
       const samples = new Float32Array(analyser.fftSize);
 
+      if (source !== 'mic') {
+        // whisper-stream can only read SDL capture devices, so system audio is chunked
+        // here and transcribed by whisper-server in the main process.
+        chunkerRef.current = new SpeechChunker((chunk) => window.nihongoWhisper.pushAudioChunk(chunk), {
+          sampleRate: context.sampleRate,
+          maxMs: listeningOptions.lengthMs
+        });
+        const processor = context.createScriptProcessor(4096, 1, 1);
+        const mute = context.createGain();
+        mute.gain.value = 0;
+        mixer.connect(processor);
+        processor.connect(mute);
+        mute.connect(context.destination);
+        processor.onaudioprocess = (event) => chunkerRef.current?.push(event.inputBuffer.getChannelData(0));
+      }
+
       mediaStreamRef.current = stream;
+      extraStreamsRef.current = extraStreams;
       audioContextRef.current = context;
       setMicStatus('recording');
       await refreshDevices();
@@ -286,8 +435,9 @@ export function App() {
       return stream;
     } catch (event) {
       const message = event instanceof Error ? event.message : String(event);
+      streams.forEach((item) => item.getTracks().forEach((track) => track.stop()));
       setMicStatus('error');
-      setError(`Tidak dapat membuka mikrofon: ${message}`);
+      setError(`Tidak dapat membuka sumber audio: ${message}`);
       return null;
     }
   };
@@ -345,8 +495,31 @@ export function App() {
 
   const start = async () => {
     setError('');
-    const stream = await startAudioMonitoring();
-    if (!stream) return;
+    const source = audioSource;
+    if (source !== 'mic') {
+      // Load the whisper-server model first so chunks are not dropped while it starts.
+      const engine = await window.nihongoWhisper.startChunkTranscriber({
+        threads: listeningOptions.threads,
+        beamSize: listeningOptions.beamSize,
+        noGpu: listeningOptions.noGpu
+      });
+      if (!engine.ok) {
+        setError(engine.error ?? 'Unable to start system audio listener.');
+        return;
+      }
+    }
+    const stream = await startAudioMonitoring(source);
+    if (!stream) {
+      if (source !== 'mic') await window.nihongoWhisper.stopChunkTranscriber();
+      return;
+    }
+    runningSourceRef.current = source;
+    const noteId = await ensureSession();
+    void window.nihongoWhisper.notes.update(noteId, { audioSource: audioSourceLabels[source], translatorModel: activeLocalModel });
+    if (source !== 'mic') {
+      setListening(true);
+      return;
+    }
     const result = await window.nihongoWhisper.startWhisper(listeningOptions);
     if (!result.ok) {
       stopAudioMonitoring();
@@ -356,15 +529,29 @@ export function App() {
   };
 
   const stop = async () => {
+    chunkerRef.current?.flush();
     stopAudioMonitoring();
-    await window.nihongoWhisper.stopWhisper();
+    if (runningSourceRef.current === 'mic') await window.nihongoWhisper.stopWhisper();
+    else await window.nihongoWhisper.stopChunkTranscriber();
+    runningSourceRef.current = null;
     setListening(false);
+    const noteId = activeNoteIdRef.current;
+    if (noteId) await window.nihongoWhisper.notes.update(noteId, { endedAt: new Date().toISOString() });
+    setHistoryRefreshKey((key) => key + 1);
   };
 
-  const clearSession = () => {
+  const newSession = async () => {
+    if (listening) await stop();
+    setActiveSession(null);
     setLines([]);
     setConclusion('');
     setConclusionStatus('idle');
+    setHistoryRefreshKey((key) => key + 1);
+  };
+
+  const changeAudioSource = (source: AudioSource) => {
+    setAudioSource(source);
+    writeStorage(audioSourceStorageKey, source);
   };
 
   const updateListeningOption = <K extends keyof Required<ListeningOptions>>(
@@ -440,6 +627,10 @@ export function App() {
             <Activity size={18} />
             Monitor
           </button>
+          <button className={view === 'history' ? 'active' : ''} onClick={() => setView('history')}>
+            <History size={18} />
+            History
+          </button>
           <button className={view === 'settings' ? 'active' : ''} onClick={() => setView('settings')}>
             <Settings size={18} />
             Settings
@@ -455,6 +646,17 @@ export function App() {
         </div>
 
         <div className="device-panel">
+          <label htmlFor="audio-source">Sumber audio</label>
+          <select
+            id="audio-source"
+            value={audioSource}
+            disabled={listening}
+            onChange={(event) => changeAudioSource(event.target.value as AudioSource)}
+          >
+            {(Object.keys(audioSourceLabels) as AudioSource[]).map((source) => (
+              <option key={source} value={source}>{audioSourceLabels[source]}</option>
+            ))}
+          </select>
           <div className="device-title-row">
             <label htmlFor="microphone-device">Microphone</label>
             <button type="button" onClick={() => void refreshDevices()} title="Refresh microphone list" aria-label="Refresh microphone list">
@@ -485,9 +687,9 @@ export function App() {
           {listening ? 'Stop Listening' : 'Start Listening'}
         </button>
 
-        <button className="secondary-action" onClick={clearSession}>
-          <RotateCcw size={18} />
-          Clear Session
+        <button className="secondary-action" onClick={() => void newSession()} title="Simpan sesi ini di History dan mulai sesi baru">
+          <Plus size={18} />
+          New Session
         </button>
 
         <div className="metric-grid">
@@ -507,18 +709,36 @@ export function App() {
 
         <div className="settings-card">
           <Settings size={18} />
-          <p>Version 2.2. Bundled local translation with selectable AI models.</p>
+          <p>Version 2.4. Session notes &amp; system audio capture.</p>
         </div>
       </aside>
 
-      {view === 'monitor' ? (
+      {view === 'history' ? (
+        <HistoryView
+          activeNoteId={activeNote?.id ?? null}
+          listening={listening}
+          refreshKey={historyRefreshKey}
+          onContinue={(note) => {
+            loadSessionIntoMonitor(note);
+            setView('monitor');
+          }}
+          onDeleted={(id) => {
+            if (id === activeNoteIdRef.current) {
+              setActiveSession(null);
+              setLines([]);
+              setConclusion('');
+              setConclusionStatus('idle');
+            }
+          }}
+        />
+      ) : view === 'monitor' ? (
         <section className="workspace">
           <header className="workspace-header">
             <div>
               <p className="eyebrow">
                 <Radio size={16} /> Japanese audio monitor
               </p>
-              <h2>Realtime Japanese to Indonesian</h2>
+              <h2>{activeNote?.title ?? 'Realtime Japanese to Indonesian'}</h2>
             </div>
             <div className="session-chip">
               <Sparkles size={16} /> Offline whisper.cpp / Local translation
@@ -570,7 +790,7 @@ export function App() {
             </div>
 
             <div className="transcript-list">
-              {lines.slice(0, 2).map((line) => (
+              {lines.map((line) => (
                 <article className="transcript-row" key={line.id}>
                   <time>{line.time}</time>
                   <div>
@@ -597,7 +817,7 @@ export function App() {
               <h2>Engine and privacy</h2>
             </div>
             <div className="session-chip">
-              <Sparkles size={16} /> Version 2.2
+              <Sparkles size={16} /> Version 2.4
             </div>
           </header>
 
