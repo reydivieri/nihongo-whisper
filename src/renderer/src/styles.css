@@ -829,7 +829,13 @@ body { overflow: hidden; }
   -webkit-line-clamp: 3;
 }
 
-.history-section { min-height: 0; overflow: hidden; }
+.history-section {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
 .conclusion-panel { height: 66px; padding: 8px 10px; margin-bottom: 6px; overflow: hidden; }
 .conclusion-panel p {
   display: -webkit-box;
@@ -842,11 +848,25 @@ body { overflow: hidden; }
 .section-title { margin-bottom: 5px; }
 .section-title h3 { font-size: 13px; }
 .section-title span { font-size: 10px; }
-.transcript-list { gap: 4px; height: 82px; max-height: none; padding: 0; overflow: hidden; }
-.transcript-row { grid-template-columns: 60px minmax(0, 1fr); gap: 7px; min-height: 39px; padding: 6px 8px; }
+.transcript-list {
+  flex: 1;
+  gap: 4px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  padding: 0 4px 0 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: #38bdf8 rgba(125, 211, 252, 0.08);
+  scrollbar-width: thin;
+}
+.transcript-list::-webkit-scrollbar { width: 7px; }
+.transcript-list::-webkit-scrollbar-track { border-radius: 999px; background: rgba(125, 211, 252, 0.08); }
+.transcript-list::-webkit-scrollbar-thumb { border-radius: 999px; background: #38bdf8; }
+.transcript-row { flex: 0 0 auto; grid-template-columns: 60px minmax(0, 1fr); gap: 7px; min-height: 39px; padding: 6px 8px; }
 .transcript-row time { font-size: 9px; }
-.transcript-row .jp { overflow: hidden; font-size: 10px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
-.transcript-row .id { overflow: hidden; margin-top: 2px; font-size: 9px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-row .jp { overflow-wrap: anywhere; font-size: 10px; line-height: 1.25; white-space: normal; }
+.transcript-row .id { overflow-wrap: anywhere; margin-top: 2px; font-size: 9px; line-height: 1.25; white-space: normal; }
 .accuracy-badge { padding: 2px 5px; font-size: 8px; }
 
 .settings-workspace { max-width: none; }
@@ -898,3 +918,79 @@ body { overflow: hidden; }
   .live-grid { grid-template-columns: 1fr 1fr; }
   .audio-readouts { grid-template-columns: minmax(120px, 1.5fr) minmax(120px, 1.5fr) repeat(3, minmax(62px, .7fr)); }
 }
+
+/* v2.4 — Session notes history */
+.history-layout {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+}
+.note-list, .note-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  padding: 10px;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow-y: auto;
+  scrollbar-color: #38bdf8 rgba(125, 211, 252, 0.08);
+  scrollbar-width: thin;
+}
+.note-detail { overflow: hidden; }
+.note-detail h3 { margin: 0; font-size: 16px; }
+.note-detail small, .note-item small { color: #94a3b8; font-size: 10px; }
+.note-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  border-radius: 8px;
+  color: #94a3b8;
+}
+.note-search input {
+  flex: 1;
+  min-height: 32px;
+  border: 0;
+  outline: none;
+  color: inherit;
+  background: transparent;
+}
+.note-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+  cursor: pointer;
+}
+.note-item:hover { border-color: rgba(125, 211, 252, 0.25); }
+.note-item.active { border-color: #38bdf8; background: rgba(56, 189, 248, 0.1); }
+.note-item strong { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.note-item p {
+  overflow: hidden;
+  margin: 0;
+  color: #cbd5e1;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-live {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #0f1418;
+  background: #4ade80;
+  font-size: 9px;
+}
+.note-empty { color: #94a3b8; font-size: 12px; }
+.compact-action { display: inline-flex; align-items: center; gap: 4px; }
+.compact-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.compact-action.danger { background: #fca5a5; }

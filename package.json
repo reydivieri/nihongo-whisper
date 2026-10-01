@@ -1,6 +1,6 @@
 {
   "name": "nihongo-whisper-desktop",
-  "version": "2.2.0",
+  "version": "2.4.0",
   "description": "Local Japanese speech transcription and Indonesian translation desktop app.",
   "main": "dist/main/index.js",
   "type": "module",
@@ -31,7 +31,7 @@
     "appId": "com.assetcom.nihongo-whisper",
     "productName": "Nihongo Whisper",
     "directories": {
-      "output": "release-v2.2"
+      "output": "release-v2.4"
     },
     "files": [
       "dist/**",
