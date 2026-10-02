@@ -4,7 +4,7 @@ Nihongo Whisper adalah aplikasi desktop Windows untuk mendengarkan audio
 berbahasa Jepang, membuat transkrip Jepang, menerjemahkannya ke Bahasa
 Indonesia, dan menyusun kesimpulan percakapan melalui perintah suara.
 
-> Status: development preview (`2.2.0`). Project ini belum merupakan rilis
+> Status: development preview (`2.3.0`). Project ini belum merupakan rilis
 > stabil dan akurasi transkripsi realtime masih sedang dikembangkan.
 
 ## Fitur
@@ -13,8 +13,16 @@ Indonesia, dan menyusun kesimpulan percakapan melalui perintah suara.
 - Terjemahan offline menggunakan bundled Ollama dan `qwen3:1.7b`.
 - Halaman Settings terpisah untuk engine, model, dan parameter audio.
 - Perintah suara untuk membuat kesimpulan pembicaraan sebelumnya.
+- **Session Notes (v2.4):** setiap sesi tersimpan sebagai note di
+  `%APPDATA%/nihongo-whisper-desktop/notes/`, lengkap dengan transkrip, terjemahan,
+  dan kesimpulan. Buka tab **History** untuk mencari, mengganti judul, menyalin,
+  export Markdown, menghapus, atau melanjutkan sesi.
+- **Audio sistem (v2.4):** pilih sumber audio *Audio sistem (Zoom/Meet)* atau
+  *Mikrofon + audio sistem* untuk menerjemahkan suara dari Zoom, Google Meet,
+  Teams, YouTube, dll. Audio ditangkap via WASAPI loopback dan ditranskripsi oleh
+  `whisper-server.exe` secara lokal.
 
-Versi 2.2 bersifat offline-only dan tidak memiliki jalur API berbayar. Audio
+Versi 2.4 bersifat offline-only dan tidak memiliki jalur API berbayar. Audio
 ditranskripsikan secara lokal menggunakan whisper.cpp. Perlu diperhatikan bahwa
 whisper.cpp hanya membuat teks dan bukan mesin terjemahan.
 
@@ -105,4 +113,4 @@ please draw a conclusion from the previous discussion
 Akurasi transkripsi offline dipengaruhi oleh microphone Windows, tingkat
 noise, jarak pembicara, capture device, kemampuan CPU/GPU, model yang digunakan,
 dan panjang potongan audio realtime. Mode offline menjaga audio tetap berada
-di komputer. Nihongo Whisper v2.2 tidak mengirim audio ke layanan eksternal.
+di komputer. Nihongo Whisper v2.3 tidak mengirim audio ke layanan eksternal.

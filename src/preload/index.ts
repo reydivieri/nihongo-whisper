@@ -16,6 +16,20 @@ contextBridge.exposeInMainWorld('nihongoWhisper', {
     noGpu?: boolean;
   }) => ipcRenderer.invoke('whisper:start', options),
   stopWhisper: () => ipcRenderer.invoke('whisper:stop'),
+  startChunkTranscriber: (options?: { threads?: number; beamSize?: number; noGpu?: boolean }) =>
+    ipcRenderer.invoke('chunk:start', options),
+  stopChunkTranscriber: () => ipcRenderer.invoke('chunk:stop'),
+  pushAudioChunk: (samples: Float32Array) => ipcRenderer.send('chunk:push', samples),
+  notes: {
+    list: () => ipcRenderer.invoke('notes:list'),
+    get: (id: string) => ipcRenderer.invoke('notes:get', id),
+    create: (meta?: unknown) => ipcRenderer.invoke('notes:create', meta),
+    upsertSegment: (id: string, segment: unknown) => ipcRenderer.invoke('notes:upsert-segment', id, segment),
+    update: (id: string, patch: unknown) => ipcRenderer.invoke('notes:update', id, patch),
+    remove: (id: string) => ipcRenderer.invoke('notes:delete', id),
+    exportMarkdown: (id: string) => ipcRenderer.invoke('notes:export', id),
+    openFolder: () => ipcRenderer.invoke('notes:open-folder')
+  },
   translate: (text: string) => ipcRenderer.invoke('translator:translate', text),
   isConclusionCommand: (text: string) => ipcRenderer.invoke('translator:is-conclusion-command', text),
   concludeDiscussion: (transcript: string) => ipcRenderer.invoke('translator:conclude-discussion', transcript),
